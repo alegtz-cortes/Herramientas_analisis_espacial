@@ -1,0 +1,322 @@
+---
+title: "Clase Biogeografía-ejercicio semana 1"
+author: "Gutiérrez-Cortés, D.A."
+date: "2026-03-05"
+output: html_document
+---
+
+```{r Cargar paqueterías}
+library(pacman)
+p_load(terra, sf, ggplot2, tidyr, dplyr, factoextra, ggpubr)
+
+getwd()
+```
+
+
+```{r Cargar las capas bioclimáticas}
+
+#leer todos los archivos .tif de WorldClim (v. 2.1):
+
+wc_todas <- list.files(path = "C:/Users/Ale/Desktop/rdir/DP_tesisdoc/biogeo_clase",
+                    full.names = T) #Importante full.names = T para que lea la ruta completa
+
+#leer las capas como SpatRaster
+lista_srast <- list()
+for (i in 1:length(wc_todas)){
+   lista_srast[[i]] <-  terra::rast(wc_todas[[i]]) #leyendo los shapefiles c/u en la ruta donde está guardado
+}
+
+lista_srast #Incluye todas las capas de WorldClim y el MDE
+
+
+# Haciendo una lista solo con los nombres de cada capa
+recortes_wc_nombres <- list()
+
+
+for(i in seq_along(wc_todas)){
+  # Usamos basename para no tener que escribir toda la ruta de C:/Users/...
+  nombre_archivo <- basename(wc_todas[i]) 
+  
+  # Limpiamos el prefijo y la extensión
+  nombre_final <- str_remove_all(nombre_archivo, "wc2.1_30s_|.tif")
+  
+  recortes_wc_nombres[[i]] <- nombre_final
+}
+
+
+```
+
+
+```{r Carga de los polígonos de Bosques templados y Selvas y recorte de las capas de Worldclim}
+
+#Polígono de bosque templado
+BPQ_shp <- vect("C:/Users/Ale/Desktop/rdir/DP_tesisdoc/biogeo_clase/datos_regiones/BPQ_MX.shp")
+
+SBC_shp<- vect("C:/Users/Ale/Desktop/rdir/DP_tesisdoc/biogeo_clase/datos_regiones/SBC_MX.shp")
+
+#Comprobar que están en el mismo sistema de coordenadas
+same.crs(lista_srast[[1]], BPQ_shp) |> print()  # con una de las capas bioclimáticas
+same.crs(lista_srast[[20]], BPQ_shp) |> print()  # con la de elevación
+
+### RECORTES
+## BPQ
+
+#recordar que los nombres sin espacios ni guión bajo ya están en el objeto recortes_wc_nombres
+croped_wc_BPQ <- list(lista_srast)
+
+for(i in 1:length(lista_srast)){
+
+  croped_wc_BPQ[[i]] <- lista_srast[[i]] |>
+    terra::mask(BPQ_shp) |>
+    terra::crop(BPQ_shp)
+
+  terra::writeRaster(
+    croped_wc_BPQ[[i]],
+    filename = paste0(
+      "C:/Users/Ale/Desktop/rdir/DP_tesisdoc/biogeo_clase/recortes/",
+      recortes_wc_nombres[[i]], "_BPQ.tif"
+    ),
+    overwrite = TRUE
+  )
+}
+
+croped_wc_BPQ[[1]]
+plot(croped_wc_BPQ[[1]])
+
+#
+# SBC
+#recordar que los nombres sin espacios ni guión bajo ya están en el objeto recortes_wc_nombres
+croped_wc_SBC <- list(lista_srast)
+
+for(i in 1:length(lista_srast)){
+
+  croped_wc_SBC[[i]] <- lista_srast[[i]] |>
+    terra::mask(SBC_shp) |>
+    terra::crop(SBC_shp)
+
+  terra::writeRaster(
+    croped_wc_SBC[[i]],
+    filename = paste0(
+      "C:/Users/Ale/Desktop/rdir/DP_tesisdoc/biogeo_clase/recortes/",
+      recortes_wc_nombres[[i]], "_SBC.tif"
+    ),
+    overwrite = TRUE
+  )
+}
+
+
+```
+
+
+# Puntos al azar
+
+```{r Generar puntos al azar}
+
+# lista de rasters en un solo stack (SpatRaster) por tipo de vegetación
+stack_BPQ <- rast(croped_wc_BPQ)
+stack_SBC  <- rast(croped_wc_SBC)
+
+
+# Configurar la semilla para fijar los mismos puntos al azar cada que se corra el código
+set.seed(123)
+
+# Generar un muestreo sistemático (Regular) de 500 puntos distribuidos uniformemente
+
+puntos_BPQ <- spatSample(stack_BPQ, 
+                            size = 500, 
+                            method = "regular", 
+                            na.rm = TRUE, #asegurar que no caigan en celdas sin datos
+                            as.df = TRUE, 
+                            xy = TRUE)
+
+puntos_SBC <- spatSample(stack_SBC, 
+                           size = 500, 
+                           method = "regular", 
+                           na.rm = TRUE, 
+                           as.df = TRUE, 
+                           xy = TRUE)
+
+# 4. Agregar una columna con el tipo de vegetación que corresponde
+puntos_BPQ$tipo_veg <- "BPQ"
+puntos_SBC$tipo_veg  <- "SBC"
+
+valores_500 <- rbind(puntos_BPQ, puntos_SBC)
+
+# Matriz con los 500 puntos al azar
+head(valores_500)
+
+
+```
+
+
+# Shapefile con los puntos al azar
+```{r}
+#Exportar 
+
+library(terra)
+
+# 1. Convertir el data.frame a un objeto vectorial (SpatVector)
+# 'geom' indica cuáles son las columnas de longitud (x) y latitud (y)
+# 'crs' define el sistema de coordenadas (WGS84)
+puntos_vector <- vect(valores_500, 
+                      geom = c("x", "y"), 
+                      crs = "EPSG:4326")
+
+# 2. Definir la ruta de salida
+# Es recomendable usar un nombre claro para que lo identifiques en QGIS o ArcGIS
+ruta_salida <- "C:/Users/Ale/Desktop/rdir/DP_tesisdoc/biogeo_clase/coords500.shp"
+
+# 3. Guardar el archivo en el disco
+writeVector(puntos_vector, ruta_salida, overwrite = TRUE)
+
+puntos_azar <- vect("C:/Users/Ale/Desktop/rdir/DP_tesisdoc/biogeo_clase/coords500.shp")
+plot(puntos_azar)
+
+```
+
+
+```{r}
+# 1. Cargar el shapefile que acabas de guardar
+puntos_azar <- vect("C:/Users/Ale/Desktop/rdir/DP_tesisdoc/biogeo_clase/coords500.shp")
+
+# 2. Crear un vector de colores basado en la columna tipo_veg
+# Si es BPQ será verde ('darkgreen'), si es SBC será amarillo ('yellow')
+colores <- ifelse(puntos_azar$tipo_veg == "BPQ", "darkgreen", "orange")
+
+# 3. Graficar con los colores y algunos detalles estéticos
+plot(puntos_azar, 
+     col = colores,       # Aplicar el vector de colores
+     pch = 16,            # Punto sólido (se ve mejor que el círculo vacío)
+     cex = 0.8,           # Tamaño de los puntos
+     mar = c(3, 3, 3, 7), # Ajustar márgenes para que quepa la leyenda
+     main = "Distribución de puntos: BPQ vs SBC")
+
+# 4. Agregar una leyenda para que el mapa sea profesional
+legend("topright", 
+       legend = c("BPQ (Bosque)", "SBC (Selva)"), 
+       col = c("darkgreen", "orange"), 
+       pch = 16, 
+       title = "Tipo de Veg.",
+       bg = "white")
+```
+
+
+# Resultados
+
+```{r Subset con las variables de interés}
+#Matriz con todos los datos
+valores_500
+
+# 1. Seleccionar variables de interés y renombrar columnas
+datos_analisis <- valores_500 %>%
+  select(tipo_veg, 
+         bio_01 = wc2.1_30s_bio_1, 
+         bio_04 = wc2.1_30s_bio_4, 
+         bio_12 = wc2.1_30s_bio_12, 
+         bio_15 = wc2.1_30s_bio_15, 
+         elev = wc2.1_30s_elev)
+
+```
+
+
+```{r Gráficos con sign. prueba de Wilcoxon}
+
+# 1. Preparar los datos en formato largo (long format)
+datos_long <- datos_analisis %>%
+  pivot_longer(cols = -tipo_veg, names_to = "variable", values_to = "valor")
+
+# 2. Crear el gráfico con comparaciones automáticas
+ggplot(datos_long, aes(x = tipo_veg, y = valor, fill = tipo_veg)) +
+  geom_boxplot(alpha = 0.7, outlier.shape = 21, outlier.alpha = 0.5) +
+  # Agregamos la prueba de Wilcoxon
+  stat_compare_means(
+    method = "wilcox.test", 
+    label = "p.signif",        # Muestra asteriscos (*, **, ***)
+    label.x = 1.5,             # Centra la etiqueta entre las cajas
+    hide.ns = FALSE            # Muestra "ns" si no es significativo
+  ) +
+  facet_wrap(~variable, scales = "free") +
+  theme_minimal() +
+  scale_fill_manual(values = c("BPQ" = "darkgreen", "SBC" = "orange")) +
+  labs(
+    title = "Diferencias Bioclimáticas: BPQ vs SBC",
+    subtitle = "Significancia basada en la prueba de Wilcoxon",
+    x = "Ecosistema", 
+    y = "Valor de la variable",
+    fill = "Vegetación"
+  ) +
+  theme(strip.text = element_text(face = "bold", size = 12))
+
+```
+
+
+#PCA
+
+```{r Análisis de Agrupamiento: PCA}
+library(factoextra)
+
+# 1. Preparar datos (solo numéricos)
+datos_pca <- datos_analisis %>% select(-tipo_veg)
+
+# 2. Ejecutar PCA (scale. = TRUE es obligatorio aquí)
+pca_res <- prcomp(datos_pca, scale. = TRUE)
+
+# 3. Graficar el Biplot (Individuos + Variables)
+fviz_pca_biplot(pca_res, 
+                geom.ind = "point", 
+                fill.ind = datos_analisis$tipo_veg,
+                col.ind = "white",
+                pointshape = 21, pointsize = 2,
+                palette = c("darkgreen", "orange"),
+                addEllipses = TRUE, # Elipses de confianza para ver el traslape
+                label = "var",
+                col.var = "black",
+                repel = TRUE,
+                legend.title = "Vegetación") +
+  theme_minimal() +
+  labs(title = "PCA: Separación Climática BPQ vs SBC")
+```
+
+
+```{r Contribución de variables PCA}
+# Gráfico de contribución de las variables al Componente 1 (el que más explica)
+fviz_contrib(pca_res, choice = "var", axes = 1)
+```
+
+
+
+# Obtener datos sobrelapados del PCA
+```{r}
+
+# 1. Obtener las coordenadas de los puntos en el espacio del PCA (PC1 y PC2)
+pca_scores <- as.data.frame(pca_res$x)
+pca_scores$tipo_veg <- datos_analisis$tipo_veg
+pca_scores$ID <- row.names(datos_analisis)
+
+# 2. Calcular el centro (centroide) de cada grupo en el PCA
+centroides <- pca_scores %>%
+  group_by(tipo_veg) %>%
+  summarise(PC1_centro = mean(PC1), PC2_centro = mean(PC2))
+
+# 3. Identificar puntos de BPQ que están "muy cerca" del centro de SBC (y viceversa)
+# Esto define el sobrelape climático
+distancias <- pca_scores %>%
+  mutate(
+    dist_a_BPQ = sqrt((PC1 - centroides$PC1_centro[1])^2 + (PC2 - centroides$PC2_centro[1])^2),
+    dist_a_SBC = sqrt((PC1 - centroides$PC1_centro[2])^2 + (PC2 - centroides$PC2_centro[2])^2),
+    diferencia = abs(dist_a_BPQ - dist_a_SBC)
+  )
+
+# 4. Extraer los 20 puntos con menor diferencia (los que están "en medio" de ambos)
+sobrelape_ids <- distancias %>%
+  arrange(diferencia) %>%
+  head(20)
+
+print(sobrelape_ids)
+
+
+```
+
+
+
+
