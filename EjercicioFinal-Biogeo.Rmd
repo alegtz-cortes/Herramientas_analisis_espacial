@@ -13,7 +13,7 @@ setwd("C:/Users/Ale/Desktop/rdir/DP_tesisdoc/biogeo_efinal") #directorio de trab
 ```
 
 
-# 1- DESCARGA DE DATOS DE OCURRENCIA (GBIF) Y LIMPIEZA
+# 1- DESCARGA DE DATOS DE OCURRENCIA (GBIF) Y LIMPIEZA (para una especie)
 ```{r descarga de gbif y manipulación de la tabla}
 #Ingreso de usuario a GBIF
 Sys.setenv(
@@ -88,6 +88,8 @@ tabla_mtem_clean <- clean_coordinates(
 
 ```
 
+# Descarga de todas ocurrencias de todas las especies
+Los registros de ocurrencia fueron obtenidos de la Infraestructura Global de Información en Biodiversidad (GBIF) mediante una descarga reproducible que incluyó múltiples especies utilizando la función occ_download() de la paquetería rgbif v. 3.8.4 (Chamberlain et al. 2023) en el entorno de programación R. La consulta se realizó mediante filtros de calidad que incluyeron presencia confirmada, coordenadas válidas y ausencia de problemas geoespaciales. La descarga generó un identificador digital único (DOI: 10.15468/dl.8r6jp6), garantizando la trazabilidad de los datos. La depuración adicional se realizó en R utilizando la paquetería CoordinateCleaner (Zizka et al. 2020).
 
 ```{r Lista de especies}
 
@@ -137,10 +139,11 @@ taxon_keys <- sapply(especies, function(sp){
 taxon_keys <- taxon_keys[!is.na(taxon_keys)]
 ```
 
+
 ```{r}
 descarga <- occ_download(
   pred_and(
-    pred_in("taxonKey", taxon_keys),   # 🔥 múltiples especies
+    pred_in("taxonKey", taxon_keys),   # lista de especies con su id
     pred("country", "MX"),
     pred("hasCoordinate", TRUE),
     pred("hasGeospatialIssue", FALSE),
@@ -151,147 +154,126 @@ descarga <- occ_download(
 occ_download_wait(descarga)
 ```
 
-
-
-Los registros de ocurrencia fueron obtenidos mediante la Infraestructura Global de Información en Biodiversidad (GBIF) utilizando descargas reproducibles (occ_download) a través de la paquetería rgbif. Para cada especie se generó un identificador digital único (DOI), asegurando la trazabilidad de los datos. Los filtros incluyeron presencia confirmada, coordenadas válidas, incertidumbre espacial ≤ 15 km y exclusión de errores geoespaciales críticos. La depuración adicional se realizó con la paquetería CoordinateCleaner.
-```{r}
-descargar_gbif_doi <- function(sp){
-
-  tryCatch({
-
-    message("Procesando: ", sp)
-    
-    # 1. Validar taxón
-    bb <- name_backbone(name = sp, rank = "species")
-    taxon_key <- dplyr::coalesce(bb$acceptedUsageKey, bb$usageKey)
-    
-    if(is.null(taxon_key) || is.na(taxon_key)){
-      message("No se encontró taxonKey: ", sp)
-      return(NULL)
-    }
-    
-    # 2. Construir descarga (filtros GBIF)
-    descarga <- occ_download(
-      pred_and(
-        pred("taxonKey", taxon_key),
-        pred("country", "MX"),
-        pred("hasCoordinate", TRUE),
-        pred("hasGeospatialIssue", FALSE),
-        pred("occurrenceStatus", "PRESENT")
-      ),
-      format = "SIMPLE_CSV"
-    )
-    
-    # 3. Esperar descarga
-    occ_download_wait(descarga)
-    
-    # 4. Obtener DOI
-    meta <- occ_download_meta(descarga)
-    doi <- meta$doi
-    
-    message("DOI: ", doi)
-    
-    # 5. Descargar archivo
-    zipfile <- occ_download_get(descarga, overwrite = TRUE)
-    
-    # 6. Leer datos
-    df <- occ_download_import(zipfile)
-    
-    # 7. Filtros finos en R
-    df_limpia <- df %>%
-      filter(
-        !is.na(decimalLongitude),
-        !is.na(decimalLatitude),
-        
-        # Incertidumbre
-        is.na(coordinateUncertaintyInMeters) | 
-          coordinateUncertaintyInMeters <= 15000,
-        
-        # Tipo de dato
-        basisOfRecord %in% c("HUMAN_OBSERVATION", "OBSERVATION", "PRESERVED_SPECIMEN"),
-        
-        # Issues críticos
-        is.na(issues) | 
-          !str_detect(issues,
-            "ZERO_COORDINATE|COUNTRY_COORDINATE_MISMATCH|COORDINATE_OUT_OF_RANGE|INVALID_COORDINATE"),
-        
-        decimalLatitude != 0,
-        decimalLongitude != 0,
-        !is.na(eventDate)
-      )
-    
-    # 8. Limpieza espacial
-    df_clean <- clean_coordinates(
-      x = df_limpia,
-      lon = "decimalLongitude",
-      lat = "decimalLatitude",
-      species = "species",
-      tests = c("capitals", "centroids", "institutions", "zeros")
-    ) %>%
-      filter(.summary == TRUE)
-    
-    # 9. Guardar CSV ancho
-    nombre_base <- gsub(" ", "_", sp)
-    
-    write.csv(df_clean,
-              paste0(nombre_base, "_gbif.csv"),
-              row.names = FALSE)
-    
-    # 10. Guardar DOI
-    writeLines(
-      paste0("DOI GBIF: ", doi),
-      paste0(nombre_base, "_DOI.txt")
-    )
-    
-    # 11. Formato largo
-    df_out <- df_clean %>%
-      transmute(
-        species = nombre_base,
-        latitude = decimalLatitude,
-        longitude = decimalLongitude
-      )
-    
-    return(list(
-      data = df_out,
-      doi = doi
-    ))
-    
-  }, error = function(e){
-    
-    message("Error en especie: ", sp)
-    message(e)
-    
-    return(NULL)
-  })
-}
-
-resultados <- lapply(especies, descargar_gbif_doi)
-
-# eliminar fallos
-resultados <- resultados[!sapply(resultados, is.null)]
-
+```{r Obtener DOI}
+meta <- occ_download_meta(descarga)
+doi <- meta$doi
+doi
+```
+```{r Citar usando la 'download key}
+rgbif::gbif_citation("0058242-260226173443078")
 ```
 
 
-```{r INSUMO: Tabla en formato largo para Biodiverse}
+```{r Importar el archivo de ocurrencias como un dataframe}
+zipfile <- occ_download_get(descarga, overwrite = TRUE)
 
-tabla_final <- bind_rows(lapply(resultados, function(x) x$data)) %>%
-  mutate(id = row_number()) %>%
-  select(id, species, latitude, longitude)
+df_gbif <- occ_download_import(zipfile) # 63,237 rows
 
+unique(df_gbif$issue) # Para ver los problemas de los datos descargados
+```
+
+### Limpieza de datos 
+Se esta eliminando:
+- Registros con NA en en longitud o latitud o 0.
+- Registros con incertidumbre >15000 m. en coordenadas
+- Registros con problemas de ZERO_COORDINATE|COUNTRY_COORDINATE_MISMATCH|COORDINATE_OUT_OF_RANGE|INVALID_COORDINATE
+- Registros con fechas inválidas (NA)
+
+Se conservan registros:
+- HUMAN_OBSERVATION, OBSERVATION, PRESERVED_SPECIMEN
+
+```{r Limpieza}
+df_limpia <- df_gbif %>%
+  filter(
+    # Coordenadas válidas
+    !is.na(decimalLongitude),
+    !is.na(decimalLatitude),
+    
+    # Incertidumbre espacial
+    is.na(coordinateUncertaintyInMeters) | 
+      coordinateUncertaintyInMeters <= 15000,
+    
+    # Tipo de registro
+    basisOfRecord %in% c("HUMAN_OBSERVATION", "OBSERVATION", "PRESERVED_SPECIMEN"),
+    
+    # Issues (columna correcta en occ_download)
+    is.na(issue) | 
+      !str_detect(issue,
+        "ZERO_COORDINATE|COUNTRY_COORDINATE_MISMATCH|COORDINATE_OUT_OF_RANGE|INVALID_COORDINATE"),
+    
+    # Coordenadas erróneas
+    decimalLatitude != 0,
+    decimalLongitude != 0,
+    
+    # Fecha válida
+    !is.na(eventDate)
+  ) #48,130 rows
+```
+
+
+```{r Limpieza espacial CoordinateCleaner}
+df_clean <- clean_coordinates(
+  x = df_limpia,
+  lon = "decimalLongitude",
+  lat = "decimalLatitude",
+  species = "species",
+  tests = c("capitals", "centroids", "institutions", "zeros")
+) %>%
+  filter(.summary == TRUE)  #47,903 rows 
+```
+
+
+```{r Eliminar filas sin nombre de especie}
+
+library(dplyr)
+library(stringr)
+
+df_clean2 <- df_clean %>%
+  filter(
+    # 1. Eliminar NA o vacíos
+    !is.na(species),
+    species != "",
+    
+    # 2. Mantener solo nombres binomiales (dos palabras)
+   # str_detect(species, "^[A-Za-z]+\\s+[A-Za-z]+$")
+  ) %>%
+  mutate(
+    # 3. Reemplazar espacio por guión bajo
+    species = str_replace_all(species, " ", "_")
+  ) #47,613 rows 
+
+unique(df_clean2$species) 
+```
+
+
+### Crear tabla en formato largo como insumo de Biodiverse
+```{r}
+tabla_final <- df_clean2 %>%
+  transmute(
+    id = row_number(),
+    species = species,
+    latitude = decimalLatitude,
+    longitude = decimalLongitude
+  )
+```
+
+### Exportar las tablas
+
+```{r Exportar tablas en csv}
+# Tabla final
 write.csv(tabla_final, "mamiferos_gbif_largo.csv", row.names = FALSE)
+
+# Datos completos limpios
+write.csv(df_clean, "mamiferos_gbif_completo.csv", row.names = FALSE)
+
+# DOI
+writeLines(
+  paste0("DOI GBIF: ", doi),
+  "GBIF_DOI.txt"
+)
 ```
 
-
-
-```{r}
-todas_citas <- unique(unlist(lapply(resultados, function(x) x$citas)))
-
-writeLines(todas_citas, "GBIF_citas_totales.txt")
-```
-
-
-
+# Parte 2. Opcional, exportar registros como shapefile 
 
 
 ### Eliminar registros fuera de México y convertir tabla de datos a shapefile
@@ -334,13 +316,4 @@ writeVector(
 )
 ```
 
-### Citar el set de datos
-```{r Citar el datasetKey}
-gbif_citation(x = "50c9509d-22c7-4a22-a47d-8c48425ef4a7") #Cambiar por la que corresponda del set descargado
-
-
-# Cita paquetería 'rgbif': Scott Chamberlain (2017). rgbif: Interface to the Global ‘Biodiversity’ Information Facility ‘API’. R package version 0.9.8. https://CRAN.R-project.org/package=rgbif
-```
-
-Script modificado de: https://rpubs.com/mntpe/tutorial_rgbif_geografia
 
