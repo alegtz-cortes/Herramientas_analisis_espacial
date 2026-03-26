@@ -1,0 +1,512 @@
+---
+title: "Untitled"
+author: "Gutiérrez-Cortés, D.A."
+date: "2026-03-17"
+output: html_document
+---
+
+```{r}
+library(pacman)
+p_load("tidyverse", "factoextra", "ggplot2", "missMDA", "FactoMineR", "corrplot")
+
+setwd("C:/Users/Ale/Desktop/rdir/DP_tesisdoc/biogeo_clase/datos_lobatae")
+
+mat_dist <- read.csv("ms_lobatae_dist_lcc.csv") 
+
+m2 <- tapply(mat_dist$longitud,mat_dist$layer,sum)
+
+
+```
+
+
+Objetivo: 
+-Identificar si hay o no un gradiente espacial con relación al tamaño
+Tamaño del área de distribución (longitud del trazo) con relación al tamaño de altura de las especies (ALTMIN Y ALTMAX)
+-Probar con la longitud y la latitud respecto a la altura del árbol (especies de distribución disyunta, parches restringidos que están muy lejos entre sí: consati y urbani)
+-Pensar en el patrón de la relación entre el número de especies y la altura de los árboles. (Con el grid que ya tenemos) 
+
+-Opciones para los datos: transformarlos a log10 para minimizar las diferencias. 
+
+OBSERVAR: La distribución espacial de los rasgos funcionales en el espacio geográfico.
+
+# Preparar matrix de rasgos funcionales
+
+```{r leer matrix y agregar columna de proporciones}
+mat_funcional <- read.csv("C:/Users/Ale/Desktop/rdir/DP_tesisdoc/biogeo_clase/datos_lobatae/lobatae_funcional.csv")
+
+#Agregar columna de proporciones largo/ancho
+mat_funcional2 <- mat_funcional %>% mutate(PROPMIN= LONMIN/ANMIN, PROPMAX = LONMAX/ANMAX)
+
+```
+
+
+#Ejercicio. Matriz con celdas y coordenadas
+# Determinar los cuantiles 
+- Cuantiles: LONMAX, VENMAX, LNUMAX
+-3 celdas con mayor cantidad de especies y ubicar su rango de distribución (con la sumatoria de las áreas)
+-Gráficos de barras con la riqueza de las celdas con mayor diversidad funcional 
+
+```{r}
+mat_grid <- read.csv("C:/Users/Ale/Desktop/rdir/DP_tesisdoc/biogeo_clase/datos_lobatae/loba_range_gr2.csv")
+mat_grid_subset <- read.csv("C:/Users/Ale/Desktop/rdir/DP_tesisdoc/biogeo_clase/datos_lobatae/range_traits_lobatae2.csv")
+
+
+quantile(mat_grid_subset$LNUMAX) # Valores de los cuartiles 
+
+LNUMAX_q4 <- mat_grid %>%  filter(., LNUMAX >=17.1583) 
+
+
+mat_range <- LNUMAX_q4 %>%
+  mutate(rich_q4_nlnu = n(), .by = ELEMENT)
+
+# Mapa
+library(pacman)
+p_load("ggplot2","maps", "sf")
+
+#TEST
+mat_plot <- mat_range %>%
+  mutate(x = -x)
+
+mat_sf <- st_as_sf(mat_plot, coords = c("x", "y"), crs = 4326)
+
+# graficar
+ggplot(mat_sf) +
+  geom_sf(aes(color = rich_q4_nlnu,
+              size = LNUMAX),
+          alpha = 0.8) +
+  scale_color_viridis_c(name = "Riqueza Q4") +
+  scale_size_continuous(name = "LNUMAX Q4") +
+  labs(title = "Distribución espacial q4 LNUMAX",
+       x = "Longitud", y = "Latitud") +
+  theme_minimal()
+
+##EJERCICIO CON LAS VENAS 
+#Identificar riqueza de las celdas del q4 del número máximo de venas
+
+quantile(mat_grid_subset$VENMAX) # Valores de los cuartiles     
+#0% 6.00000 | 25% 9.56875 | 50$ 11.05556 | 75% 14.02500 |100%  20.33333 
+
+VENMAX_q4 <- mat_grid %>%  filter(., VENMAX >=14.02500) 
+
+mat_venmax4 <- VENMAX_q4 %>%
+  mutate(rich_q4_nvenmax = n(), .by = ELEMENT)
+
+mat_plot_venmax4 <- mat_venmax4 %>%
+  mutate(x = -x)
+
+mat_sf_vm4 <- st_as_sf(mat_plot_venmax4, coords = c("x", "y"), crs = 4326)
+
+# graficar
+ggplot(mat_sf_vm4) +
+  geom_sf(aes(color = rich_q4_nvenmax,
+              size = mat_sf_vm4$VENMAX),
+          alpha = 0.9) +
+  scale_color_viridis_c(name = "Riqueza Q4") +
+  scale_size_continuous(name = "VENMAX Q4") +
+  labs(title = "Distribución espacial q4 VENMAX",
+       x = "Longitud", y = "Latitud") +
+  theme_minimal()
+
+
+```
+
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(sf)
+
+# 1. Calcular cuartiles
+q <- quantile(mat_grid$VENMAX, probs = c(0, 0.25, 0.5, 0.75, 1), na.rm = TRUE)
+
+# 2. Crear variable de cuartiles
+mat_grid_q <- mat_grid %>%
+  mutate(
+    cuartil = case_when(
+      VENMAX >= q[1] & VENMAX < q[2] ~ "Q1",
+      VENMAX >= q[2] & VENMAX < q[3] ~ "Q2",
+      VENMAX >= q[3] & VENMAX < q[4] ~ "Q3",
+      VENMAX >= q[4] & VENMAX <= q[5] ~ "Q4"
+    )
+  )
+
+# 3. Calcular riqueza por especie dentro de cada cuartil
+mat_rich <- mat_grid_q %>%
+  filter(!is.na(cuartil)) %>%
+  mutate(rich_n = n(), .by = c(ELEMENT, cuartil))
+
+# 4. Agregar por celda (IMPORTANTE)
+mat_plot <- mat_rich %>%
+  summarise(
+    rich_n = unique(rich_n),
+    VENMAX = mean(VENMAX),
+    .by = c(x, y, cuartil)
+  ) %>%
+  mutate(x = -x)  # corregir coordenadas
+
+# 5. Convertir a sf
+mat_sf <- st_as_sf(mat_plot, coords = c("x", "y"), crs = 4326)
+
+# 6. Graficar panel 2x2
+ggplot(mat_sf) +
+  geom_sf(aes(color = VENMAX,
+              size = rich_n),
+          alpha = 0.9) +
+  scale_color_viridis_c(limits = range(mat_plot$rich_n)) +
+  scale_size_continuous(name = "VENMAX", range = c(1, 6)) +
+  facet_wrap(~cuartil, ncol = 2) +
+  labs(title = "Distribución espacial por cuartiles de VENMAX",
+       x = "Longitud", y = "Latitud") +
+  theme_minimal()
+
+
+
+plots <- lapply(unique(mat_sf$cuartil), function(q) {
+  
+  ggplot(mat_sf %>% filter(cuartil == q)) +
+    geom_sf(aes(color = VENMAX,
+                size = rich_n),
+            alpha = 0.9) +
+    scale_color_viridis_c() +
+    scale_size_continuous(range = c(1, 5)) +
+    labs(title = paste("Cuartil", q),
+         x = "Longitud", y = "Latitud") +
+    theme_minimal()
+})
+
+plots[[4]]
+plots[[3]]
+plots[[1]]
+plots[[2]]
+
+
+
+```
+
+### Descarga de datos WorldClim 
+```{r}
+install.packages("rpaleoclim")
+library(rpaleoclim)
+library(terra)
+library(sf)
+
+
+# lectura de tu shp
+loba_shp <- read_sf("C:/Users/Ale/Desktop/rdir/DP_tesisdoc/biogeo_clase/datos_lobatae_catomi/loba_features.shp")
+
+# vectorizar shp  para obtener extend
+vector_mx <- terra::vect(loba_shp)
+
+
+# código de extracción
+
+#install.packages("rpaleoclim")
+library(rpaleoclim)
+#clima reciente
+clim_1grado<- paleoclim(
+  period = "cur",
+  resolution =  "2_5m",
+  region = vector_mx,
+  as = "terra",
+  skip_cache = FALSE,
+  cache_path = fs::path_temp(),
+  quiet = FALSE
+)
+
+#Graficar todas las capas
+par(mfrow = c(3,4))
+lapply(1:10, function(i) plot(clim_1grado[[i]], main = names(clim_1grado)[i]))
+
+```
+
+
+# Extraer valores de Capas bioclimáticas para cada celda 
+```{r}
+#Verificar que coincide proyección de ambas capas
+crs(clim_1grado) #EPSG:4326
+
+loba_vect <- terra::vect(loba_shp)
+ 
+crs(loba_vect) <- "EPSG:4326"
+loba_vect <- project(loba_vect, crs(clim_1grado))
+
+#Extraer la media de los valores de las capas bioclimáticas por cada celda del grid
+library(dplyr)
+extraccion <- terra::extract(
+  clim_1grado,
+  loba_vect,
+  fun = mean,
+  na.rm = TRUE
+) %>%
+  as.data.frame() %>%
+  mutate(ELEMENT = loba_vect$ELEMENT) %>%
+  select(-ID)
+
+loba_clima <- bind_cols(loba_shp, extraccion)
+
+
+#Graficar todas las capas
+par(mfrow = c(3,4))
+lapply(1:10, function(i) plot(clim_1grado[[i]], main = names(clim_1grado)[i]))
+
+```
+
+# Gráficos-Mapas
+```{r}
+library(tidyr)
+library(dplyr)
+
+loba_clima_long <- loba_clima %>%
+  pivot_longer(
+    cols = starts_with("bio"),  # ajusta si tus capas tienen otro prefijo
+    names_to = "variable",
+    values_to = "valor"
+  )
+
+library(ggplot2)
+library(viridis)
+
+ggplot(loba_clima_long) +
+  geom_sf(aes(fill = valor), color = NA) +
+  scale_fill_viridis_c(option = "viridis", na.value = "grey80") +
+  facet_wrap(~variable) +
+  theme_minimal() +
+  labs(
+    title = "Variables bioclimáticas promedio por celda (1°)",
+    fill = "Valor"
+  )
+
+
+```
+
+
+
+```{r}
+
+
+```
+
+
+
+
+
+
+### Eliminar variables más correlacionadas
+```{r Colinealidad- Spearman}
+
+mat_data <- mat_funcional2 %>% select(-ESPECIE,-AOL,-ATO)
+
+#Correlación de espearman 'corrplot'
+cor_matrix <- cor(mat_data, method = "spearman")
+
+# Create a correlation heatmap
+corrplot(
+  cor_matrix,
+  method = "color",
+  type = "upper",
+  tl.cex = 0.8,
+  tl.col = "black",
+  tl.srt = 45,
+  addCoef.col = "black",
+  title = "Spearman Correlation Heatmap"
+)
+```
+
+
+```{r}
+#library(missMDA) # Imputar NA's
+# library(FactoMineR) #Visualizar el pca
+
+# 1. Preparar datos (solo numéricos)
+pca_test <- mat_funcional2 %>% select(-ESPECIE,-AOL,-ATO, -LONMIN, -LONMAX, -ANMIN, -ANMAX)
+
+# Estimar número óptimo de componentes
+nb <- estim_ncpPCA(pca_test, ncp.max = 5)
+
+# Imputar datos
+pca_test_imput <- imputePCA(pca_test, ncp = nb$ncp)$completeObs
+
+# PCA
+pca_funcional <- prcomp(pca_test_imput, scale. = TRUE)
+
+# Varianza explicada
+var_exp <- (pca_funcional$sdev)^2
+var_exp_rel <- var_exp / sum(var_exp)
+
+# Porcentaje de los dos primeros componentes
+pc1 <- round(var_exp_rel[1] * 100, 2)
+pc2 <- round(var_exp_rel[2] * 100, 2)
+
+pc1
+pc2
+
+fviz_eig(pca_funcional, addlabels = TRUE)
+```
+
+```{r}
+set.seed(123)
+
+# Clustering
+grupos <- kmeans(pca_funcional$x[,1:2], centers = 3)$cluster
+grupos <- as.factor(grupos)  
+
+# Varianza explicada
+var_exp <- (pca_funcional$sdev)^2
+var_exp_rel <- var_exp / sum(var_exp)
+pc1 <- round(var_exp_rel[1] * 100, 2)
+pc2 <- round(var_exp_rel[2] * 100, 2)
+
+# Scores
+library(dplyr)
+scores <- as.data.frame(pca_funcional$x[,1:2])
+scores$grupo <- grupos
+
+# Centroides
+centroides <- scores %>%
+  group_by(grupo) %>%
+  summarise(PC1 = mean(PC1), PC2 = mean(PC2))
+
+# Plot final
+fviz_pca_biplot(pca_funcional,
+                geom.ind = "point",
+                col.ind = grupos,
+                palette = "jco",
+                addEllipses = TRUE,
+                repel = TRUE,
+                col.var = "blue") +
+  geom_point(data = centroides,
+             aes(x = PC1, y = PC2),
+             color = "black",
+             size = 4,
+             shape = 8) +
+  labs(title = paste0("PCA de rasgos (PC1 = ", pc1, "%, PC2 = ", pc2, "%)"))
+
+
+```
+
+```{r Aportes de las variables al agrupamiento}
+
+fviz_cos2(pca_funcional, choice = "var", axes = 1:2)
+
+
+```
+
+
+# Distribuciones de las especies
+El .csv corresponde a la longitud de trazo de las especies de encinos blancos de una capa vectorial en proyección Cónica Conforme de Lambert (EPSG:6372) en metros.  
+```{r Insumos}
+mat_distances <- read.csv("C:/Users/Ale/Desktop/rdir/DP_tesisdoc/biogeo_clase/datos_lobatae/ms_lobatae_dist_lcc.csv")
+
+mat_longitud <- mat_distances %>% rename(ESPECIE = layer) %>% select(ESPECIE,longitud)
+
+
+#Verificar el epiteto de la columna ESPECIE en ambas matrices
+unique(mat_funcional2$ESPECIE)
+unique(mat_longitud$ESPECIE)
+
+#Quitar el sufijo _mat
+library(dplyr)
+library(stringr)
+
+mat_longitud2 <- mat_longitud %>%
+  mutate(
+    ESPECIE = str_remove(ESPECIE, "_?mst$")
+  )
+
+#Identificar cuáles no coinciden 
+setdiff(mat_funcional2$ESPECIE, mat_longitud2$ESPECIE)
+setdiff(mat_longitud2$ESPECIE, mat_funcional2$ESPECIE) #spp que no están en mat_funcional2
+
+
+#Pasar a minúsculas los nombres
+mat_funcional2 <- mat_funcional2 %>%
+  mutate(ESPECIE = tolower(ESPECIE))
+
+mat_longitud2 <- mat_longitud2 %>%
+  mutate(ESPECIE = tolower(ESPECIE))
+
+mat_longitud2 <- mat_longitud2 %>%
+  mutate(
+    ESPECIE = recode(ESPECIE,
+      "emori" = "emoryi"
+    )
+  )
+
+intersect(mat_funcional2$ESPECIE, mat_longitud2$ESPECIE)
+
+```
+
+### Unión de ambas matrices
+```{r}
+
+resumen_longitud <- mat_longitud2 %>%
+  group_by(ESPECIE) %>%
+  summarise(
+    n = n(),
+    media = mean(longitud, na.rm = TRUE),
+    mediana = median(longitud, na.rm = TRUE),
+    min = min(longitud, na.rm = TRUE),
+    max = max(longitud, na.rm = TRUE),
+    sd = sd(longitud, na.rm = TRUE),
+    cv = sd / media,            # coeficiente de variacion
+    q25 = quantile(longitud, 0.25, na.rm = TRUE),
+    q75 = quantile(longitud, 0.75, na.rm = TRUE)
+  )
+
+#Matrices unidas
+mat_final <- mat_funcional2 %>%
+  inner_join(resumen_longitud, by = "ESPECIE")  ## Sumar la longitud de todos 
+```
+
+## CORRELACIONES
+```{r}
+
+#Correlación de espearman 'corrplot'
+mat_final2 <- mat_final %>% select(., -ESPECIE)
+cor_matrix_full <- cor(mat_final2, method = "spearman")
+
+# Create a correlation heatmap
+corrplot(
+  cor_matrix_full,
+  method = "color",
+  type = "upper",
+  tl.cex = 0.5,
+  tl.col = "black",
+  tl.srt = 45,
+  title = "Spearman Correlation Heatmap"
+)
+```
+
+## MODELO LINEAL
+```{r}
+modelo1 <- lm(media ~ ALTMAX + LPEMAX + ANMAX, data = mat_final)
+summary(modelo1)
+
+modelo2 <- lm(cv ~ ALTMAX + LPEMAX + ANMAX, data = mat_final)
+summary(modelo2)
+
+modelo3 <- lm(max ~ ALTMAX + LPEMAX + ANMAX, data = mat_final)
+summary(modelo3)
+```
+
+```{r}
+# Extraer scores del PCA
+scores_pca <- as.data.frame(pca_funcional$x[,1:2])
+scores_pca$ESPECIE <- mat_funcional2$ESPECIE
+
+# Unir
+mat_modelo <- inner_join(scores_pca, resumen_longitud, by = "ESPECIE")
+
+# Modelo
+modelo_pca <- lm(media ~ PC1 + PC2, data = mat_modelo)
+summary(modelo_pca)
+```
+
+# INCORPORAR LATITUD Y LONGITUD EN EL PCA Y MODELO
+
+-Eliminar a conzati y urbani
+- Por la agregación de frutos: radiata, consati y urbani
+
+
+
