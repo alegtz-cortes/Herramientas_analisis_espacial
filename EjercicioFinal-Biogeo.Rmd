@@ -211,15 +211,46 @@ df_limpia <- df_gbif %>%
 ```
 
 
+### Subset con menor incertidumbre en metros de cada coordenada
+Incertidumbre menor de <1km (df_limpia2) y menor de 500m. (df_limpia3)
+```{r}
+df_limpia3 <- df_gbif %>%
+  filter(
+    # Coordenadas válidas
+    !is.na(decimalLongitude),
+    !is.na(decimalLatitude),
+    
+    # Incertidumbre espacial
+    is.na(coordinateUncertaintyInMeters) | 
+      coordinateUncertaintyInMeters <= 500,
+    
+    # Tipo de registro
+    basisOfRecord %in% c("HUMAN_OBSERVATION", "OBSERVATION", "PRESERVED_SPECIMEN"),
+    
+    # Issues (columna correcta en occ_download)
+    is.na(issue) | 
+      !str_detect(issue,
+        "ZERO_COORDINATE|COUNTRY_COORDINATE_MISMATCH|COORDINATE_OUT_OF_RANGE|INVALID_COORDINATE"),
+    
+    # Coordenadas erróneas
+    decimalLatitude != 0,
+    decimalLongitude != 0,
+    
+    # Fecha válida
+    !is.na(eventDate)
+  ) # 42,540 rows  | df_limpia3 40616 rows
+```
+
+
 ```{r Limpieza espacial CoordinateCleaner}
 df_clean <- clean_coordinates(
-  x = df_limpia,
+  x = df_limpia3,
   lon = "decimalLongitude",
   lat = "decimalLatitude",
   species = "species",
   tests = c("capitals", "centroids", "institutions", "zeros")
 ) %>%
-  filter(.summary == TRUE)  #47,903 rows 
+  filter(.summary == TRUE)  #47,903 rows | df_clean2 42,320 rows | df_limpia3  40,404 rows
 ```
 
 
@@ -240,7 +271,7 @@ df_clean2 <- df_clean %>%
   mutate(
     # 3. Reemplazar espacio por guión bajo
     species = str_replace_all(species, " ", "_")
-  ) #47,613 rows 
+  ) #47,613 rows | 42,062 rows | 40,165 rows
 
 unique(df_clean2$species) 
 ```
@@ -254,17 +285,17 @@ tabla_final <- df_clean2 %>%
     species = species,
     latitude = decimalLatitude,
     longitude = decimalLongitude
-  )
+  )  # df_clean2 42,062 rows
 ```
 
 ### Exportar las tablas
 
 ```{r Exportar tablas en csv}
 # Tabla final
-write.csv(tabla_final, "mamiferos_gbif_largo.csv", row.names = FALSE)
+write.csv(tabla_final, "mamiferosv3_gbif_largo.csv", row.names = FALSE)
 
 # Datos completos limpios
-write.csv(df_clean, "mamiferos_gbif_completo.csv", row.names = FALSE)
+write.csv(df_clean2, "mamiferosv3_gbif_completo.csv", row.names = FALSE)
 
 # DOI
 writeLines(
@@ -273,16 +304,64 @@ writeLines(
 )
 ```
 
-# Parte 2. Opcional, exportar registros como shapefile 
+
+# Generar tablas con el epiteto hasta subespecie
+```{r}
+head(df_clean) # Tabla en formato largo
+
+library(dplyr)
+library(stringr)
+
+df_long <- df_clean %>%
+  filter(
+    # Coordenadas válidas
+    !is.na(decimalLatitude),
+    !is.na(decimalLongitude),
+    
+    # Especie válida
+    !is.na(species),
+    species != ""
+  ) %>%
+  mutate(
+    # 1. Estandarizar especie (Genero_especie)
+    species_base = str_replace_all(species, " ", "_"),
+    
+    # 2. Construir nombre final con infraespecie o "_sp"
+    species_final = ifelse(
+      !is.na(infraspecificEpithet) & infraspecificEpithet != "",
+      paste0(species_base, "_", infraspecificEpithet),
+      paste0(species_base, "_sp")
+    )
+  ) %>%
+  select(
+    species = species_final,
+    latitude = decimalLatitude,
+    longitude = decimalLongitude
+  ) %>%
+  distinct() %>%  # elimina duplicados exactos
+  mutate(
+    id = row_number()
+  ) %>%
+  select(id, species, latitude, longitude)
+
+# 29,261 rows porque eliminó duplicados exactos de coordenadas
+```
+
+```{r Exportar tabla larga con epitetos infraespecificos}
+write.csv(df_long, "mamiferos_infrasp_long.csv", row.names = FALSE)
+```
 
 
-### Eliminar registros fuera de México y convertir tabla de datos a shapefile
+# Parte 2. Recortar la base de datos a la extensión de México y exportar en shapefile 
+
+Parte de los registros caen en el mar, aún con la eliminación de la incertidumbre. En este paso se recorta a al extensión del mapa de México y se exportarán los registros como una capa vectorial en formato shapefile.
+
 ```{r Registros en formato vectorial y delimitados al extent}
 #función de paquetería sf
 
 tabla_sf <- st_as_sf(
-tabla_clean,
-coords = c("decimalLongitude", "decimalLatitude"),
+df_long,
+coords = c("longitude", "latitude"),
 crs = 4326, #EPSG: 4326 WGS84
 remove = FALSE
 )
@@ -296,24 +375,86 @@ returnclass = "sf"
 
 #Comprobar si todos los registros de la tabla caen en México
 tabla_mx <- st_filter(tabla_sf, mexico)  
-type_sum(tabla_mx) #tabla_mx ya es un objeto tipo shapefile 
 
-nrow(tabla_mx) #498 registros dentro del extent para México
+nrow(tabla_mx) #27,459 registros dentro del extent para México
 
 ```
+Lo mismo para recortar la tabla final (formato largo) de especies al extent de México
+```{r}
+tabla_final #Ya está en formato largo, tiene epíteto específico
 
+#función de paquetería sf
+
+tabla_sf_sp <- st_as_sf(
+tabla_final,
+coords = c("longitude", "latitude"),
+crs = 4326, #EPSG: 4326 WGS84
+remove = FALSE
+)
+
+# Descargar shapefile de México
+mexico <- ne_countries(
+country = "Mexico",
+scale = 50,
+returnclass = "sf"
+)
+
+#Comprobar si todos los registros de la tabla caen en México
+tabla_mx_sp <- st_filter(tabla_sf_sp, mexico)  
+
+nrow(tabla_mx_sp) #38171 registros dentro del extent para México
+```
+
+
+
+# SHAPEFILE (OCURRENCIAS) FINAL
 ```{r Guardar los registros en formato shapefile y csv}
 setwd("C:/Users/Ale/Desktop/rdir/DP_tesisdoc/biogeo_efinal")
-dir.create("outputs", showWarnings = FALSE) #carpeta nueva donde guardará los archivos
+dir.create("capas", showWarnings = FALSE) #carpeta nueva donde guardará los archivos vectoriales o tifs
+
+
+# SHAPEFILE CON REGISTROS DE ESPECIES 
+tabla_mx_vect_sp <- vect(tabla_mx_sp)
+
+writeVector(
+  tabla_mx_vect_sp,
+  filename = "capas/mammalsgbif_mx_sp.shp",
+  filetype = "ESRI Shapefile",
+  overwrite = TRUE
+)
+
+#SHAPEFILE CON REGISTROS DE SUBESPECIES
 
 tabla_mx_vect <- vect(tabla_mx)
 
 writeVector(
   tabla_mx_vect,
-  filename = "outputs/mtem_mx_gbif.shp",
+  filename = "capas/mammalsgbif_mx_subsp.shp",
   filetype = "ESRI Shapefile",
   overwrite = TRUE
 )
+```
+
+# TABLA FINAL 
+Exportar en formato tabla sin los registros que caen en mar
+```{r exportar registros del recorte México}
+#ESPECIES
+reg_mx_longdf_sp <- as.data.frame(tabla_mx_vect_sp) %>% select(id, species, latitude, longitude) #38,171 rows
+
+write.csv(reg_mx_longdf_sp, "mammals_sp_long_recmx.csv", row.names = FALSE)
+
+
+#SUBESPECIES
+reg_mx_longdf <- as.data.frame(tabla_mx) %>% select(id, species, latitude, longitude)
+
+write.csv(reg_mx_longdf, "mammals_subsp_long_recmx.csv", row.names = FALSE) #27,459 rows
+
+```
+
+# EXTRACCIÓN DE VALORES AMBIENTALES
+
+```{r}
+
 ```
 
 
