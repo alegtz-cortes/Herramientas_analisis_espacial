@@ -1,0 +1,249 @@
+---
+title: "preparacion_inputs"
+author: "Gutiérrez-Cortés, D.A."
+date: "2026-04-20"
+output: html_document
+---
+
+Código para preparación de insumos.
+Insumo:
+1) Matriz con listado de mamíferos terrestres reportados para México según Gómez-Ortíz et al. 2017 (excluyendo quirópteros y roedores), con rasgos funcionales.
+
+Se homogeneiza la base de datos para unificar columna de Género y especie y agregar el TaxonKey de gbif. 
+
+
+# Validación de especies de mamíferos 
+
+*Descripción lista CONABIO* (archivo dwca-mamiferos-v1.5.zip)
+Esta lista reúne la información taxonómica y nomenclatural de las especies de mamíferos en México. Contiene un total de 3,593 registros, de los cuales 614 corresponden a especies y 824 a subespecies válidas clasificadas de acuerdo con las propuestas más reconocidas en el país, representando en conjunto 57 familias y 259 géneros. El arreglo taxonómico se basa en Wilson & Reeder (2011), Woodman (2018) y Kitchener et al., (2017). El endemismo es con base en Ramírez-Pulido et al., (2014), Ceballos (2014) y Briones-Salas et al. (2016).
+*Citación* Reséndiz-López M A (2025). Listado taxonómico de mamíferos con distribución en México. Version 1.5. Conabio Test. Checklist dataset. http://ipttest.conabio.gob.mx/iptconabiotest/resource?r=mamiferos&v=1.5
+
+```{r #Carga de librerías}
+getwd()
+library(pacman)
+p_load(tidyverse, stringr, dplyr, rgbif)
+
+#
+
+```
+
+
+# Listado de especies con nombre taxonómico válido
+```{r}
+
+# Leer checklist CONABIO
+mamiferos <- read.csv("C:/Users/Ale/Desktop/rdir/doct_cap1/preparacion_inputs/mamiferos_mx_conabio.csv")
+
+# Filtrar solo especies aceptadas
+spp_validas <- mamiferos %>%
+  filter(
+    taxonomicStatus == "accepted",
+    taxonRank == "species"
+  ) %>%
+  mutate(
+    species = paste(genus, specificEpithet)
+  ) %>%
+  pull(species) %>%
+  unique() # listado con 614 spp válidas
+
+```
+# 
+
+```{r}
+# library(rgbif)
+
+taxon_keys <- sapply(spp_validas, function(sp){
+  
+  bb <- name_backbone(name = sp)
+  
+  # versión robusta (evita warning)
+  if(!is.null(bb$usageKey)){
+    return(bb$usageKey)
+  } else {
+    return(NA)
+  }
+})
+
+# eliminar NA
+keys_valid <- taxon_keys[!is.na(taxon_keys)] #613 TaxonKeys
+
+
+```
+# Descarga masiva desde rgbif
+
+```{r}
+
+#Ingreso de usuario a GBIF
+Sys.setenv(
+GBIF_USER = "a-gtz-cortes",
+GBIF_PWD = "9Ky6Wc8.jeW$TLP",
+GBIF_EMAIL = "dgutierrezc@enesmorelia.unam.mx"
+)
+
+descarga_occ <- occ_download(
+  pred_and(
+    pred_in("taxonKey", keys_valid),  # lista de especies válidas con su id
+    pred("country", "MX"),
+    pred("hasCoordinate", TRUE),
+    pred("hasGeospatialIssue", FALSE),
+    pred("occurrenceStatus", "PRESENT")
+  ),
+  format = "SIMPLE_CSV"
+)
+
+occ_download_wait(descarga_occ)
+
+```
+
+```{r Obtener DOI}
+meta <- occ_download_meta("0043814-260409193756587")
+doi <- meta$doi
+doi
+```
+```{r Citar usando la 'download key}
+rgbif::gbif_citation("0043814-260409193756587")
+```
+
+
+
+#Importar base de datos de la descarga
+
+# Limpieza de registros
+```{r}
+library(pacman)
+p_load(arrow, dplyr, stringr)
+
+# Leer directamente desde el zip descomprimido (carpeta)
+dir.create("gbif_data")
+
+# Descomprime UNA vez manualmente o con:
+unzip("0043814-260409193756587.zip", exdir = "gbif_data")
+
+# Leer como dataset Arrow
+ds <- open_dataset("gbif_data", format = "csv", delimiter = "\t")
+
+######### Me quedé aquí ########### Tal vez si lee el ds pero hay errores en el siguiente código
+
+# write_dataset(ds, "gbif_parquet", format = "parquet") #no funcionó
+
+df_filtrado <- ds %>%
+  filter(
+    !is.na(decimalLongitude),
+    !is.na(decimalLatitude),
+    occurrenceStatus == "PRESENT",
+    is.na(coordinateUncertaintyInMeters) |
+      coordinateUncertaintyInMeters <= 15000,
+    basisOfRecord %in% c(
+      "HUMAN_OBSERVATION",
+      "OBSERVATION",
+      "PRESERVED_SPECIMEN"
+    ),
+    is.na(issue) |
+      !str_detect(issue,
+        "ZERO_COORDINATE|COUNTRY_COORDINATE_MISMATCH|COORDINATE_OUT_OF_RANGE|INVALID_COORDINATE"
+      ),
+    decimalLatitude != 0,
+    decimalLongitude != 0,
+    !is.na(eventDate)
+  ) %>%
+  select(
+    species,
+    decimalLatitude,
+    decimalLongitude
+  )
+
+df_small <- df_filtrado %>%
+  collect()
+```
+
+
+```{r}
+getwd()
+df_mammals613 <- occ_download_import(as.download("0043814-260409193756587.zip"))
+
+#unique(df_gbif$issue) # Para ver los problemas de los datos descargados
+
+library(dplyr)
+library(stringr)
+
+head(df_mammals613)
+
+
+df_clean <- df_mammals613 %>%
+  filter(
+    # Coordenadas válidas
+    !is.na(decimalLongitude),
+    !is.na(decimalLatitude),
+    
+    # Presencia
+    occurrenceStatus == "PRESENT",
+    
+    # Incertidumbre
+    is.na(coordinateUncertaintyInMeters) |
+      coordinateUncertaintyInMeters <= 15000,
+    
+    # Tipo de dato
+    basisOfRecord %in% c(
+      "HUMAN_OBSERVATION",
+      "OBSERVATION",
+      "PRESERVED_SPECIMEN"
+    ),
+    
+    # Issues críticos
+    is.na(issue) |
+      !str_detect(issue,
+        "ZERO_COORDINATE|COUNTRY_COORDINATE_MISMATCH|COORDINATE_OUT_OF_RANGE|INVALID_COORDINATE"
+      ),
+    
+    # Coordenadas inválidas
+    decimalLatitude != 0,
+    decimalLongitude != 0,
+    
+    # Fecha válida
+    !is.na(eventDate)
+  )
+
+# Limpieza adicional con CoordinateCleaner
+
+library(CoordinateCleaner)
+
+df_clean2 <- clean_coordinates(
+  x = df_clean,
+  lon = "decimalLongitude",
+  lat = "decimalLatitude",
+  species = "species",
+  tests = c("capitals", "centroids", "institutions", "zeros")
+)
+
+```
+
+
+```{r Estandarizar nombres y exportar}
+
+df_clean3 <- df_clean2 %>%
+  filter(!is.na(species)) %>%
+  mutate(
+    species = str_replace_all(species, " ", "_")
+  )
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
